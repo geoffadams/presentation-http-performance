@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
 
-    <title>Modular JavaScript</title>
+    <title>Web Performance</title>
 
     <meta name="author" content="Geoff Adams">
 
@@ -30,7 +30,288 @@
             </section>
 
             <section>
-                <h1></h1>
+                <h2>Overview</h2>
+                <ul>
+                    <li>HTTP Caching</li>
+                    <li>Varnish</li>
+                    <li>Profiling with xhprof</li>
+                    <li>HTTP 2.0</li>
+                </ul>
+            </section>
+
+            <section>
+                <h1>HTTP Caching</h1>
+            </section>
+
+            <section>
+                <h2>HTTP Caching</h2>
+                <ul>
+                    <li>Client-side cache</li>
+                    <li>Controlled via headers set by the server</li>
+                    <li>
+                        Rules for end and intermediate caches defined by:
+                        <ul>
+                            <li>Cache-Control</li>
+                            <li>Expires</li>
+                            <li>ETag</li>
+                        </ul>
+                    </li>
+                    <li>
+                        Vary headers specify which request headers are used to vary responses, e.g.:
+                        <ul>
+                            <li>"Vary: Cookie" says the user's cookie could change response</li>
+                        </ul>
+                    </li>
+                    <li>All well and good for longer usage sessions and frequent users</li>
+                    <li>Mobile networks may impose further caching in violation of restrictive rules - can cause issues!</li>
+                </ul>
+            </section>
+
+            <section>
+                <h1>Varnish</h1>
+            </section>
+
+            <section>
+                <h2>Varnish</h2>
+                <ul>
+                    <li>Makes websites fast</li>
+                    <li>Primarily a HTTP accelerator, also a reverse proxy and load balancer</li>
+                    <li>Provides additional functionality such as ESIs, forced compression</li>
+                    <li>
+                        Helps with resilience:
+                        <ul>
+                            <li>Grace mode serves cached, but stale, content if backend is down</li>
+                            <li>Saint mode blacklists backend for a period of time if errors occur</li>
+                            <li>Combination of both allow servers to recover from high load whilst reducing end user impact</li>
+                        </ul>
+                    </li>
+                    <li>Whole raft of tools to help tune and monitor - even in production environments</li>
+                </ul>
+            </section>
+
+            <section>
+                <h2>How Varnish works</h2>
+                <ul>
+                    <li>Stores caches in memory, with clever virtual memory paging</li>
+                    <li>Avoids writing to the disk (except for virtual memory)</li>
+                    <li>Extremely fast as a result</li>
+                    <li>Configured through a compiled language: Varnish Configuration Language (VCL)</li>
+                    <li>VCL defines exactly how to handle backends, allows you (almost) unlimited control</li>
+                    <li>Varnish is most effective when configured for a particular application</li>
+                </ul>
+            </section>
+
+            <section>
+                <h2>An Example Architecture</h2>
+                <ul>
+                    <li>Group of backends usually hooked up to one Varnish instance</li>
+                    <li>Varnish handles rudimentary load balancing between backends</li>
+                    <li>Client makes request to Varnish, which then decides which backend to use</li>
+                    <li>Varnish may serve straight from cache or forward the request to the backend</li>
+                </ul>
+            </section>
+
+            <section>
+                <h2>VCL and Hashing</h2>
+                <ul>
+                    <li>Cached responses are identified by a hash</li>
+                    <li>This hash comes from the request which generated the response</li>
+                    <li>By default, hashes only use the Host and URL of the request</li>
+                </ul>
+                <pre><code data-trim>
+                    GET /funny-cat-pictures HTTP/1.1
+                    Host: www.theinternet.com
+                </code></pre>
+                <p>is different from...</p>
+                <pre><code data-trim>
+                    GET /funny-cat-pictures/ HTTP/1.1
+                    Host: theinternet.com
+                </code></pre>
+                <p>Obviously this isn't quite enough...</p>
+            </section>
+
+            <section>
+                <h2>VCL</h2>
+                <ul>
+                    <li>C-like syntax</li>
+                    <li>Actually compiled down into bytecode, which makes it fast</li>
+                    <li>Very powerful, allows complete control of both handling requests and responses</li>
+                    <li>Small standard library of functionality, including regular expressions</li>
+                    <li>
+                        Most common uses:
+                        <ul>
+                            <li>Rewrite incoming requests to make them more homogenous</li>
+                            <li>Rewrite responses</li>
+                            <li>Define how to handle backend errors</li>
+                            <li>Define load balancing strategy</li>
+                            <li>Enable ESIs</li>
+                        </ul>
+                    </li>
+                </ul>
+            </section>
+
+            <section>
+                <h2>VCL Functions</h2>
+                <p>Some standard hooks to attach to:</p>
+                <ul>
+                    <li>vcl_recv: handles incoming requests</li>
+                    <li>vcl_hash: called when hashing the request to identify if it's in the cache or not</li>
+                    <li>vcl_fetch: called after a response has been retrieved from a backend server</li>
+                    <li>vcl_hit, vcl_miss: handle cache hits and misses, respectively</li>
+                    <li>vcl_error: handles errors from backend servers or Varnish itself</li>
+                </ul>
+                <p>Useful functions:</p>
+                <ul>
+                    <li>hash_data() adds some arbitrary data into the hash</li>
+                    <li>regsub()/regsuball() allow you to use RegEx to rewrite things, commonly headers</li>
+                </ul>
+            </section>
+
+            <section>
+                <h2>VCL example</h2>
+                <p>Stuff you'd usually do in Apache configs</p>
+                <pre><code data-trim>
+sub vcl_recv {
+    // normalize host name by removing the "www."
+    set req.http.Host = regsub(req.http.Host, "www\.", "");
+
+    if (req.http.Content-Type ~ "(image|audio|video)") {
+        // disable compression for pre-compressed files
+        remove req.http.Accept-Encoding;
+
+        // also remove cookies from them altogether
+        remove req.http.Cookie;
+    }
+}
+                </code></pre>
+            </section>
+
+            <section>
+                <h2>Another VCL example</h2>
+                <p>Rewrite Cookie header to only include 'location' and 'options' cookies</p>
+                <pre><code data-trim>
+sub vcl_recv {
+  if (req.http.Cookie) {
+    set req.http.Cookie = ";" + req.http.Cookie;
+    set req.http.Cookie = regsuball(req.http.Cookie, "; +", ";");
+    set req.http.Cookie = regsuball(req.http.Cookie, ";(location|options)=", "; \1=");
+    set req.http.Cookie = regsuball(req.http.Cookie, ";[^ ][^;]*", "");
+    set req.http.Cookie = regsuball(req.http.Cookie, "^[; ]+|[; ]+$", "");
+  }
+
+  if (req.http.Cookie == "") {
+    remove req.http.Cookie;
+  }
+}
+                </code></pre>
+            </section>
+
+            <section>
+                <h2>Why Rewrite Requests At All?</h2>
+                <ul>
+                    <li>You might want to ignore certain cookies but not all</li>
+                    <li>
+                        Ordering of cookies changes between clients, even though identical content-wise -
+                        these variances are treated as different strings, thus, different hashes
+                    </li>
+                    <li>Other headers may change the response (Accept-Language etc)</li>
+                    <li>Misbehaving backends or applications - headers not always ideal</li>
+                    <li>Power to override cache policy set by the backend</li>
+                </ul>
+            </section>
+
+            <section>
+                <h2>Tools</h2>
+                <p>varnishlog</p>
+                <ul>
+                    <li>View requests as they come through</li>
+                    <li>Turn on the firehose!</li>
+                    <li>Can filter using command line options (or sed)</li>
+                    <li>Cycled log kept by Varnish in memory - never written to disk</li>
+                    <li>Can be a good debugging tool: see what happens to requests as they come through</li>
+                    <li>Can even use it in live (although it may be like The Matrix)</li>
+                    <li>Realtime</li>
+                </ul>
+            </section>
+
+            <section>
+                <h2>... glorious tools</h2>
+                <p>varnishstat</p>
+                <ul>
+                    <li>Numbers! See what Varnish is up to</li>
+                    <li>Monitor cache hits, misses, cache entries...</li>
+                    <li>Good for measuring and comparing performance, especially if load/stress testing</li>
+                    <li>Realtime</li>
+                </ul>
+            </section>
+
+            <section>
+                <h2>... more tools</h2>
+                <p>varnishtop</p>
+                <ul>
+                    <li>Collates similar log entries</li>
+                    <li>A combination of detail from varnishlog with metrics from varnishstat</li>
+                    <li>Similar set of filters to varnishlog</li>
+                    <li>Realtime</li>
+                </ul>
+            </section>
+
+            <section>
+                <h2>... tools everywhere</h2>
+                <p>varnishreplay</p>
+                <ul>
+                    <li>Replays traffic from logs</li>
+                    <li>Good for warming caches or testing</li>
+                    <li>Can be used in conjunction with varnishstat for comparing VCL configs</li>
+                </ul>
+            </section>
+
+            <section>
+                <h1>Profiling with xhprof</h1>
+            </section>
+
+            <section>
+                <h2>Profiling</h2>
+                <ul>
+                    <li>Observing how a program runs</li>
+                    <li>See function calls, memory usage, CPU usage</li>
+                    <li>Identify bottlenecks and optimisation targets</li>
+                    <li>Only used in development or testing environments as it makes things very slow</li>
+                    <li>In PHP-land, XDebug is the most common profiler</li>
+                </ul>
+            </section>
+
+            <section>
+                <h2>xhprof</h2>
+                <ul>
+                    <li>Written by Facebook</li>
+                    <li>More performant than XDebug</li>
+                    <li>Hierarchical profiler, shows call graphs (unlike XDebug)</li>
+                    <li>Available on your local Sandbox</li>
+                </ul>
+            </section>
+
+            <section>
+                <h2>xhprof</h2>
+                <p>Time for a live demo! This can't possibly go wrong...</p>
+            </section>
+
+            <section>
+                <h1>The Future</h1>
+            </section>
+
+            <section>
+                <h2>HTTP 2.0</h2>
+                <p>Currently going through the standardisation process, should be submitted in late 2014</p>
+                <p>Approach being chosen is a straight copy of Google's SPDY prototcol</p>
+                <p>SPDY basically improves request pipelining and batching</p>
+                <p>Also enforces header compression</p>
+                <p>Largely sits on top of HTTP 1.1</p>
+                <p>Browsers already support it (well, not IE)</p>
+            </section>
+
+            <section>
+                <h1>Questions?</h1>
             </section>
         </div>
     </div>
